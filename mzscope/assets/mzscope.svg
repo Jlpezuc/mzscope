@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bezel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a4453"/>
+      <stop offset="1" stop-color="#1c222b"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1a26"/>
+      <stop offset="1" stop-color="#071019"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="clip"><rect x="34" y="42" width="188" height="150" rx="10"/></clipPath>
+  </defs>
+
+  <!-- carcasa -->
+  <rect x="12" y="20" width="232" height="216" rx="34" fill="url(#bezel)"/>
+  <rect x="12" y="20" width="232" height="216" rx="34" fill="none" stroke="#0b0e12" stroke-width="3"/>
+
+  <!-- pantalla -->
+  <rect x="34" y="42" width="188" height="150" rx="10" fill="url(#screen)" stroke="#0a1622" stroke-width="3"/>
+
+  <!-- reticula -->
+  <g clip-path="url(#clip)" stroke="#1f4a63" stroke-width="1.5">
+    <path d="M71 42V192M109 42V192M147 42V192M185 42V192"/>
+    <path d="M34 79H222M34 117H222M34 154H222"/>
+  </g>
+  <g clip-path="url(#clip)" stroke="#2e6a8c" stroke-width="2">
+    <path d="M128 42V192"/>
+    <path d="M34 117H222"/>
+  </g>
+
+  <!-- traza -->
+  <g clip-path="url(#clip)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M34 117 C50 117 55 62 74 62 S98 172 118 172 S142 62 162 62 S186 172 206 172 S222 117 240 117"
+          stroke="#39d0ff" stroke-width="7" filter="url(#glow)"/>
+    <path d="M34 117 C50 117 55 62 74 62 S98 172 118 172 S142 62 162 62 S186 172 206 172 S222 117 240 117"
+          stroke="#c8f4ff" stroke-width="2.5"/>
+  </g>
+
+  <!-- marcador de disparo -->
+  <path d="M212 96 L222 102 L212 108 Z" fill="#ffb347"/>
+
+  <!-- mandos -->
+  <circle cx="72" cy="214" r="8" fill="#0f1319" stroke="#5c6b7d" stroke-width="2.5"/>
+  <circle cx="104" cy="214" r="8" fill="#0f1319" stroke="#5c6b7d" stroke-width="2.5"/>
+  <circle cx="152" cy="214" r="8" fill="#0f1319" stroke="#5c6b7d" stroke-width="2.5"/>
+  <circle cx="184" cy="214" r="8" fill="#0f1319" stroke="#5c6b7d" stroke-width="2.5"/>
+  <circle cx="184" cy="214" r="3" fill="#39d0ff"/>
+</svg>

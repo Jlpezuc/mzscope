@@ -171,6 +171,8 @@ mzscope/
 │   ├── filters.py       acoplamiento y filtros de las trazas (media/RMS, armónicos, IIR con scipy)
 │   ├── theme.py         temas claro/oscuro
 │   ├── sim.py           placa simulada
+│   ├── icon.py          icono de la aplicacion (assets/mzscope.svg -> ventanas, barra de tareas, .png/.ico)
+│   ├── assets/          mzscope.svg / .png / .ico
 │   └── ui/              main_window, plots, fft, channels, channel_dialog, range_slider, trigger_panel, control
 ├── requirements.txt
 ├── headers/         javascope_original.h (copia del software original, para sim --old)
