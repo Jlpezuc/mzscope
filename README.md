@@ -55,8 +55,13 @@ python -m pip install -r requirements.txt
 ## Uso
 
 ```
-run.bat            (o  python -m mzscope)
+run.bat            (o  python -m mzscope)      con consola: se ven los mensajes y errores
+run.vbs            (o  doble clic en mzscope.pyw)   SIN ventana de consola (pythonw.exe)
 ```
+
+Sin consola, los errores van a `outputs/mzscope.log`. Para un acceso directo en el escritorio con
+el icono del scope: destino `pythonw.exe -m mzscope`, "iniciar en" la carpeta `mzscope`, e icono
+`mzscope/assets/mzscope.ico` (o crea el acceso directo sobre `run.vbs` y cámbiale el icono).
 
 1. Pestaña **Conexión**: IP de la placa (`192.168.1.233`, ver la configuración de red en la
    documentación). Con *Conectar automáticamente* (por defecto) el scope se queda esperando a la
@@ -176,7 +181,7 @@ mzscope/
 │   └── ui/              main_window, plots, fft, channels, channel_dialog, range_slider, trigger_panel, control
 ├── requirements.txt
 ├── headers/         javascope_original.h (copia del software original, para sim --old)
-├── run.bat / sim.bat / sim_old.bat
+├── run.bat / run.vbs / mzscope.pyw / sim.bat / sim_old.bat
 └── README.md
 ```
 
