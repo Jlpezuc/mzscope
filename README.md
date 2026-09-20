@@ -130,6 +130,21 @@ lentos fija el contador de secuencia `slowDataID`, y si no coincide casi todas l
 por perdidas. El scope lo detecta (los ids recibidos no encajan) y lo avisa en la pestaña
 *Conexión* y en la barra de estado.
 
+## Hilos: la recepción nunca se bloquea
+
+| Dónde | Qué hace | Coste típico |
+|---|---|---|
+| **Proceso de red** (`client.py`, proceso hijo) | recibe los paquetes, **contesta a la placa antes de tocar nada** (la placa espera la respuesta para enviar el siguiente) y los pasa a la GUI por una cola sin límite | — |
+| **Hilo de la GUI** | vacía la cola (`client.poll()` cada 33 ms), mete las muestras en el buffer, graba el CSV, busca el disparo, y **solo pinta arrays ya calculados** (`setData`) | 1–5 ms por ciclo |
+| **Hilo de render** (`render.py`) | escala, acoplamiento, filtros, recorte y diezmado (`PlotStack.compute`) | lo que cueste el filtro |
+
+El hilo de render trabaja con la política *el último gana*: si un cálculo tarda más que un ciclo,
+el siguiente frame usa los datos más recientes y los intermedios se saltan (`render.dropped`),
+nunca se encolan frames viejos ni se pierden muestras. Con un filtro artificialmente lento
+(600 ms/frame) la recepción sigue a 667 paquetes/s, 0 muestras perdidas y la GUI responde.
+Numpy/scipy sueltan el GIL en las operaciones pesadas, así que el render no frena la ingestión;
+y aunque lo hiciera, la recepción es otro proceso y no se entera.
+
 ## Acoplamiento y filtro del gráfico
 
 Cada gráfico tiene un acoplamiento y un filtro (`PlotConfig.coupling`, `PlotConfig.filter`), que
@@ -173,6 +188,7 @@ mzscope/
 │   ├── buffer.py        buffer circular con base de tiempo y detección de huecos
 │   ├── logger.py        CSV (exportación y grabación en hilo aparte -> outputs/)
 │   ├── settings.py      configuración persistente (JSON) y modelo canales/gráficos/filtro
+│   ├── render.py        hilo de render (calculo de las trazas fuera de la GUI, el ultimo gana)
 │   ├── filters.py       acoplamiento y filtros de las trazas (media/RMS, armónicos, IIR con scipy)
 │   ├── theme.py         temas claro/oscuro
 │   ├── sim.py           placa simulada

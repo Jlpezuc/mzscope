@@ -1,4 +1,9 @@
-"""Pila de graficos de tiempo (uno o varios, eje X compartido)."""
+"""Pila de graficos de tiempo (uno o varios, eje X compartido).
+
+El trabajo pesado (escala, acoplamiento, filtros, recorte y diezmado) esta separado del dibujo:
+``compute()`` es numpy puro y se ejecuta en el hilo de render (render.py); ``apply()`` solo hace
+``setData`` con los arrays ya calculados y corre en el hilo de la GUI.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -132,40 +137,57 @@ class TimePlot(pg.PlotWidget):
             return 0
         return filters.warmup_samples(self.cfg.filter, self.ts)
 
-    def update_data(self, t: np.ndarray, data: np.ndarray, configs: list[ChannelConfig],
-                    keep: tuple[float, float] | None = None):
-        """Escala y acopla cada canal, aplica el filtro del grafico a las trazas "f", recorta a
-        ``keep`` (rango de tiempo que se dibuja: fuera quedan las muestras de arranque de los
-        filtros), diezma y dibuja."""
-        if not self.traces:
-            return
+    def compute(self, t: np.ndarray, data: np.ndarray, configs: list[ChannelConfig],
+                keep: tuple[float, float] | None = None) -> dict | None:
+        """Parte de calculo (sin tocar Qt, se ejecuta en el hilo de render): escala y acopla cada
+        canal, aplica el filtro del grafico a las trazas "f", recorta a ``keep`` (rango de tiempo
+        que se dibuja: fuera quedan las muestras de arranque de los filtros) y diezma.
+        Devuelve {"keys", "t", "data", "legend"} para ``apply``."""
+        traces = list(self.traces)
+        cfg = self.cfg
+        if not traces or len(t) == 0:
+            return None
         cols = []
+        legend: dict[str, str] = {}
         scaled: dict[int, np.ndarray] = {}
-        for key, slot, kind in self.traces:
+        for key, slot, kind in traces:
             if slot not in scaled:
                 c = configs[slot]
                 y = data[:, slot]
                 if c.scale != 1.0 or c.offset != 0.0:
                     y = y * c.scale + c.offset
-                scaled[slot] = filters.couple(y, self.cfg.coupling)   # el acoplamiento va antes que todo
+                scaled[slot] = filters.couple(y, cfg.coupling)   # el acoplamiento va antes que todo
             y = scaled[slot]
             if kind == "f":
-                y, info = filters.apply_filter(t, y, self.cfg.filter, self.ts)
+                y, info = filters.apply_filter(t, y, cfg.filter, self.ts)
                 if "fund_hz" in info:
-                    lbl = self._legend_label(key)
-                    if lbl is not None:
-                        lbl.setText(f"{slot + 1}: {self.labels.get(slot, '')} · {filters.describe(self.cfg.filter, info)}")
+                    legend[key] = f"{slot + 1}: {self.labels.get(slot, '')} · {filters.describe(cfg.filter, info)}"
             cols.append(y)
-        if len(t) == 0:
-            return
         dd = np.column_stack(cols).astype(np.float32, copy=False)
         if keep is not None:
             m = (t >= keep[0]) & (t <= keep[1])
             if m.any() and not m.all():
                 t, dd = t[m], dd[m]      # asi la decimacion reparte sus puntos solo entre lo visible
         tt, dd = decimate_minmax(t, dd)
-        for i, (key, _, _) in enumerate(self.traces):
-            self.curves[key].setData(tt, dd[:, i])
+        return {"keys": [k for k, _, _ in traces], "t": tt, "data": dd, "legend": legend}
+
+    def apply(self, res: dict | None):
+        """Parte de dibujo (hilo de la GUI): setData con lo que devolvio ``compute``."""
+        if not res:
+            return
+        for i, key in enumerate(res["keys"]):
+            curve = self.curves.get(key)
+            if curve is not None:                     # la estructura puede haber cambiado mientras se calculaba
+                curve.setData(res["t"], res["data"][:, i])
+        for key, text in res["legend"].items():
+            lbl = self._legend_label(key)
+            if lbl is not None:
+                lbl.setText(text)
+
+    def update_data(self, t: np.ndarray, data: np.ndarray, configs: list[ChannelConfig],
+                    keep: tuple[float, float] | None = None):
+        """compute + apply en el mismo hilo (uso sincrono)."""
+        self.apply(self.compute(t, data, configs, keep))
 
 
 class PlotStack(QWidget):
@@ -178,6 +200,7 @@ class PlotStack(QWidget):
         super().__init__(parent)
         self.theme = theme
         self.plots: list[TimePlot] = []
+        self.generation = 0               # sube en cada rebuild: los resultados de otra generacion se descartan
         self.splitter = QSplitter(Qt.Vertical)
         self.splitter.setHandleWidth(4)
         lay = QVBoxLayout(self)
@@ -195,6 +218,7 @@ class PlotStack(QWidget):
             p.setParent(None)
             p.deleteLater()
         self.plots = []
+        self.generation += 1
         for i, pc in enumerate(plot_cfgs):
             tp = TimePlot(pc, self.theme)
             tp.ts = self.ts
@@ -278,15 +302,25 @@ class PlotStack(QWidget):
         for p in self.plots:
             p.ts = ts
 
+    def compute(self, t: np.ndarray, data: np.ndarray, configs: list[ChannelConfig],
+                keep: tuple[float, float] | None = None) -> list:
+        """Calculo de todos los graficos (hilo de render). El filtro se aplica sobre las muestras
+        reales y cada grafico diezma sus propias trazas."""
+        return [p.compute(t, data, configs, keep) for p in self.plots]
+
+    def apply(self, results: list, t_last: float | None, window_s: float):
+        """Dibujo (hilo de la GUI). ``results`` viene de ``compute`` de la misma estructura
+        (``generation``); si los graficos se han recreado entre medias se descarta."""
+        for p, res in zip(self.plots, results):
+            p.apply(res)
+        if self.follow and not self.trigger_mode and self.plots and t_last is not None:
+            self.plots[0].setXRange(t_last - window_s, t_last, padding=0)
+
     def update_data(self, t: np.ndarray, data: np.ndarray, configs: list[ChannelConfig], window_s: float,
                     keep: tuple[float, float] | None = None):
-        """``keep``: rango de tiempo que se dibuja; lo que hay fuera (muestras de arranque de los
-        filtros) se filtra pero no se diezma ni se dibuja."""
-        # el filtro se aplica sobre las muestras reales; cada grafico diezma sus propias trazas
-        for p in self.plots:
-            p.update_data(t, data, configs, keep)
-        if self.follow and not self.trigger_mode and self.plots and len(t):
-            self.plots[0].setXRange(t[-1] - window_s, t[-1], padding=0)
+        """compute + apply en el mismo hilo (uso sincrono). ``keep``: rango de tiempo que se
+        dibuja; lo que hay fuera (muestras de arranque de los filtros) se filtra pero no se dibuja."""
+        self.apply(self.compute(t, data, configs, keep), float(t[-1]) if len(t) else None, window_s)
 
     def clear_data(self):
         for p in self.plots:

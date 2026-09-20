@@ -16,6 +16,7 @@ from ..buffer import SampleBuffer
 from ..client import BoardClient
 from ..header import BoardNames, default_names, find_header, load_header
 from ..logger import OUTPUT_DIR, CsvRecorder, write_csv
+from ..render import RenderJob, RenderThread
 from ..settings import PlotConfig, Settings
 from ..theme import apply_theme
 from ..trigger import Trigger
@@ -57,6 +58,11 @@ class MainWindow(QMainWindow):
         self._pan_timer.setSingleShot(True)
         self._pan_timer.setInterval(40)
         self._pan_timer.timeout.connect(self._draw_visible)
+        # calculo de las trazas (filtros, diezmado) fuera del hilo de la GUI
+        self.render = RenderThread(self)
+        self.render.done.connect(self._on_rendered)
+        self.render.failed.connect(lambda tb: print("render:", tb))
+        self.render.start()
 
         self._build_ui()
         self._wire()
@@ -488,9 +494,29 @@ class MainWindow(QMainWindow):
         margin = 0.25 * (x1 - x0)
         pre, post = self._warmup_seconds()
         t, d = b.range_seconds(x0 - margin - pre, x1 + margin + post)
+        self._render(t, d, keep=(x0 - margin, x1 + margin), follow=False)
+
+    # ------------------------------------------------------------------ render en hilo aparte
+    def _render(self, t: np.ndarray, d: np.ndarray, keep: tuple[float, float] | None, follow: bool,
+                window_s: float = 0.0):
+        """Encola el calculo de las trazas (escala, acoplamiento, filtros, diezmado) en el hilo de
+        render; el resultado vuelve por ``_on_rendered``. Los datos se copian: el buffer sigue
+        escribiendose mientras se calcula. Si hay un calculo en cola sin empezar se sustituye
+        (siempre se dibuja lo mas reciente)."""
+        if len(t) == 0 or not self.plot_stack.plots:
+            return
+        t = np.ascontiguousarray(t, dtype=np.float64)
+        d = np.array(d, dtype=np.float32, copy=True)
+        stack, configs = self.plot_stack, self.settings.channels
+        tag = {"gen": stack.generation, "t_last": float(t[-1]), "follow": follow, "window": window_s}
+        self.render.submit(RenderJob(lambda: stack.compute(t, d, configs, keep), tag))
+
+    def _on_rendered(self, results, tag: dict):
+        if tag["gen"] != self.plot_stack.generation:
+            return                       # los graficos se recrearon mientras se calculaba
         follow = self.plot_stack.follow
-        self.plot_stack.follow = False
-        self.plot_stack.update_data(t, d, self.settings.channels, 0, keep=(x0 - margin, x1 + margin))
+        self.plot_stack.follow = tag["follow"] and follow
+        self.plot_stack.apply(results, tag["t_last"], tag["window"])
         self.plot_stack.follow = follow
 
     def _warmup_seconds(self) -> tuple[float, float]:
@@ -539,8 +565,7 @@ class MainWindow(QMainWindow):
         if trig:
             self.plot_stack.set_trigger_range(float(self.cmb_window.currentData()), c.pretrigger)
             if self._capture is not None:
-                self.plot_stack.update_data(self._capture[0], self._capture[1], self.settings.channels, 0,
-                                            keep=self._trigger_keep())
+                self._render(self._capture[0], self._capture[1], keep=self._trigger_keep(), follow=False)
         self._update_trigger_label()
 
     def _on_trigger_changed(self):
@@ -610,8 +635,7 @@ class MainWindow(QMainWindow):
             self._capture = self.trigger.capture
             self._capture_is_trig = True
             self._capture_wall = time.monotonic()
-            self.plot_stack.update_data(self._capture[0], self._capture[1], self.settings.channels, 0,
-                                        keep=self._trigger_keep())
+            self._render(self._capture[0], self._capture[1], keep=self._trigger_keep(), follow=False)
             self.plot_stack.set_trigger_range(window, c.pretrigger)
             if c.sweep == "single":
                 self.act_run.setChecked(False)
@@ -622,7 +646,7 @@ class MainWindow(QMainWindow):
                 self._capture = fr
                 self._capture_is_trig = False
                 self._capture_wall = time.monotonic()
-                self.plot_stack.update_data(fr[0], fr[1], self.settings.channels, 0, keep=self._trigger_keep())
+                self._render(fr[0], fr[1], keep=self._trigger_keep(), follow=False)
         self._update_trigger_label()
 
     # ------------------------------------------------------------------ conexion
@@ -771,7 +795,7 @@ class MainWindow(QMainWindow):
             margin = 0.25 * (x1 - x0)
             t, d = b.range_seconds(x0 - margin - pre, x1 + margin + post)
             keep = (x0 - margin, x1 + margin)
-        self.plot_stack.update_data(t, d, self.settings.channels, window, keep=keep)
+        self._render(t, d, keep=keep, follow=True, window_s=window)
 
     # ------------------------------------------------------------------ acciones
     def _on_pause(self, paused: bool):
@@ -785,10 +809,7 @@ class MainWindow(QMainWindow):
         if paused:
             # al pausar se muestra todo el buffer para poder navegar
             t, d = self.buffer.latest_seconds(self.buffer.count * self.buffer.ts_seconds)
-            follow = self.plot_stack.follow
-            self.plot_stack.follow = False
-            self.plot_stack.update_data(t, d, self.settings.channels, 0)
-            self.plot_stack.follow = follow
+            self._render(t, d, keep=None, follow=False)
         else:
             self.act_follow.setChecked(True)
 
@@ -947,6 +968,7 @@ class MainWindow(QMainWindow):
         self.settings.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         self.settings.save()
         self.recorder.stop()
+        self.render.stop()
         if self.client.isRunning():
             self.client.stop_connection()
             self.client.wait(2000)
