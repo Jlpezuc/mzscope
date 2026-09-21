@@ -39,7 +39,7 @@ class MainWindow(QMainWindow):
         self.resize(1500, 900)
 
         self.names = self._load_names()
-        self.buffer = SampleBuffer(settings.capacity, n_slow=len(self.names.slow_data))
+        self.buffer = SampleBuffer(settings.capacity, n_slow=self.names.n_slow)
         self.buffer.ts_manual_us = settings.ts_manual_us or None
         self.isr_period_id = self.names.slow_index("JSSD_FLOAT_ISR_Period_us")
         self.client = BoardClient(self)
@@ -858,7 +858,7 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "javascope.h", f"No se pudo leer {p}:\n{exc}")
             return
-        self.buffer.n_slow = max(len(self.names.slow_data), 2)
+        self.buffer.n_slow = max(self.names.n_slow, 2)
         self.isr_period_id = self.names.slow_index("JSSD_FLOAT_ISR_Period_us")
         self._refresh_structure()
 

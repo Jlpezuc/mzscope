@@ -34,7 +34,7 @@ class FakeBoard:
         self.ts_us = 1e6 / fs
         self.drop_prob = drop_prob
         self.n_obs = len(names.observables)
-        self.n_slow = len(names.slow_data)
+        self.n_slow = names.n_slow          # ids 0..ENDMARKER-1, como javascope.c
         self.selected = [0] * P.CHANNELS
         self.state = "idle"          # idle / running / control / error
         self.enable_system = False

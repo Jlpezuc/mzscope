@@ -192,7 +192,7 @@ class ControlPanel(QWidget):
         self.slow_table.setRowCount(0)
         self._slow_rows.clear()
         for sid, n in enumerate(names.slow_data):
-            if sid == 0:
+            if sid == 0 or sid >= names.n_slow:      # ZEROVALUE y ENDMARKER no se envian
                 continue
             r = self.slow_table.rowCount()
             self.slow_table.insertRow(r)

@@ -124,6 +124,16 @@ class BoardNames:
     def observable_labels(self) -> list[str]:
         return [self.pretty(n) for n in self.observables]
 
+    @property
+    def n_slow(self) -> int:
+        """Numero de slowDataID distintos que envia la placa: el contador va de 0 a JSSD_ENDMARKER-1
+        (javascope.c: ``if (js_cnt_slowData >= JSSD_ENDMARKER) js_cnt_slowData = 0``), el ENDMARKER
+        nunca se envia."""
+        n = len(self.slow_data)
+        if n and self.slow_data[-1].endswith("_ENDMARKER"):
+            n -= 1
+        return max(n, 1)
+
     def slow_index(self, name: str) -> int:
         try:
             return self.slow_data.index(name)
