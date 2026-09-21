@@ -66,6 +66,7 @@ class PlotConfig:
     y_min: float = -1.0
     y_max: float = 1.0
     grid: bool = True
+    visible: bool = True                        # oculto = no se dibuja ni se calcula, pero conserva canales y ajustes
     show: str = "original"                      # que se dibuja: original | filtro | ambas
     coupling: str = "DC"                        # DC | AC: se aplica a TODAS las trazas (y al disparo) antes del filtro
     filter: FilterConfig = field(default_factory=FilterConfig)
@@ -98,6 +99,18 @@ class PlotConfig:
         j = min(max(i + delta, 0), len(keys) - 1)
         keys[i], keys[j] = keys[j], keys[i]
         self.order = keys
+
+
+def move_plot(plots: list[PlotConfig], channels: list[ChannelConfig], i: int, j: int) -> None:
+    """Intercambia los graficos ``i`` y ``j`` y reasigna los canales para que sigan en el suyo."""
+    if i == j or not (0 <= i < len(plots)) or not (0 <= j < len(plots)):
+        return
+    plots[i], plots[j] = plots[j], plots[i]
+    for c in channels:
+        if c.plot == i:
+            c.plot = j
+        elif c.plot == j:
+            c.plot = i
 
 
 def _plot_from_dict(d: dict) -> PlotConfig:

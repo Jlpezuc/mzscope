@@ -73,7 +73,9 @@ el icono del scope: destino `pythonw.exe -m mzscope`, "iniciar en" la carpeta `m
    **filtro del gráfico** al que pertenece y el **orden de dibujo** de sus trazas.
    **Enviar selección a la placa** manda los comandos 201..220 (por defecto se envían al conectar).
 3. Pestaña **Gráficos**: añadir/quitar gráficos, título, etiqueta Y, escala Y automática o fija,
-   y **Filtro y orden de las trazas…** (la misma ventana, sin la parte del canal).
+   y **Filtro y orden de las trazas…** (la misma ventana, sin la parte del canal). La casilla de
+   cada gráfico lo oculta sin quitarlo (conserva sus canales y ajustes, y no se calcula mientras
+   está oculto); ▲/▼ (o Ctrl+↑/↓) cambian el orden de arriba a abajo, y los canales siguen a su gráfico.
 4. Pestaña **Control**: máquina de estados, botones y consignas.
 5. Barra superior: **Pausar** (espacio) muestra todo el buffer y permite zoom/pan con el ratón
    (rueda = zoom, arrastrar = mover, clic derecho = menú de pyqtgraph); **Seguir** vuelve a

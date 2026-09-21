@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QByteArray, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow, QMessageBox,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPushButton, QSpinBox, QSplitter, QTabWidget, QToolBar, QVBoxLayout, QWidget)
 
 from .. import protocol as P
@@ -17,7 +17,7 @@ from ..client import BoardClient
 from ..header import BoardNames, default_names, find_header, load_header
 from ..logger import OUTPUT_DIR, CsvRecorder, write_csv
 from ..render import RenderJob, RenderThread
-from ..settings import PlotConfig, Settings
+from ..settings import PlotConfig, Settings, move_plot
 from ..theme import apply_theme
 from ..trigger import Trigger
 from .channel_dialog import ChannelDialog
@@ -285,12 +285,23 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 8, 8)
         self.plot_list = QListWidget()
+        self.plot_list.setToolTip("Marca/desmarca para mostrar u ocultar el gráfico sin perder sus canales ni ajustes.\n"
+                                  "▲/▼ (o Ctrl+↑/↓) cambian el orden de arriba a abajo.")
         hb = QHBoxLayout()
         self.btn_plot_add = QPushButton("＋ Añadir")
         self.btn_plot_del = QPushButton("− Quitar")
+        self.btn_plot_up = QPushButton("▲")
+        self.btn_plot_down = QPushButton("▼")
+        for b in (self.btn_plot_up, self.btn_plot_down):
+            b.setFixedWidth(32)
+            b.setToolTip("Mover el gráfico seleccionado")
         hb.addWidget(self.btn_plot_add)
         hb.addWidget(self.btn_plot_del)
-        lbl = QLabel("Gráficos: cada canal se asigna a un gráfico en la pestaña Canales (\"—\" = canal oculto).")
+        hb.addStretch(1)
+        hb.addWidget(self.btn_plot_up)
+        hb.addWidget(self.btn_plot_down)
+        lbl = QLabel("Gráficos: cada canal se asigna a un gráfico en la pestaña Canales (\"—\" = canal oculto). "
+                     "La casilla oculta el gráfico sin quitarlo; ▲/▼ cambian el orden.")
         lbl.setWordWrap(True)
         lay.addWidget(lbl)
         lay.addWidget(self.plot_list)
@@ -362,8 +373,13 @@ class MainWindow(QMainWindow):
         self.control_panel.command.connect(self.client.send_command)
 
         self.plot_list.currentRowChanged.connect(self._on_plot_selected)
+        self.plot_list.itemChanged.connect(self._on_plot_checked)
         self.btn_plot_add.clicked.connect(self._on_plot_add)
         self.btn_plot_del.clicked.connect(self._on_plot_del)
+        self.btn_plot_up.clicked.connect(lambda: self._on_plot_move(-1))
+        self.btn_plot_down.clicked.connect(lambda: self._on_plot_move(+1))
+        QShortcut(QKeySequence("Ctrl+Up"), self.plot_list, lambda: self._on_plot_move(-1))
+        QShortcut(QKeySequence("Ctrl+Down"), self.plot_list, lambda: self._on_plot_move(+1))
         for w in (self.ed_plot_title, self.ed_plot_ylabel):
             w.editingFinished.connect(self._on_plot_edited)
         self.chk_plot_auto.toggled.connect(self._on_plot_edited)
@@ -422,7 +438,10 @@ class MainWindow(QMainWindow):
         self.plot_list.blockSignals(True)
         self.plot_list.clear()
         for p in self.settings.plots:
-            self.plot_list.addItem(p.title)
+            it = QListWidgetItem(p.title)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if p.visible else Qt.Unchecked)
+            self.plot_list.addItem(it)
         self.plot_list.blockSignals(False)
         self.plot_list.setCurrentRow(cur if 0 <= cur < len(self.settings.plots) else 0)
 
@@ -459,6 +478,24 @@ class MainWindow(QMainWindow):
             self._refresh_structure()
         else:
             self.plot_stack.apply_plot_configs()
+
+    def _on_plot_checked(self, item: QListWidgetItem):
+        row = self.plot_list.row(item)
+        if not (0 <= row < len(self.settings.plots)):
+            return
+        p = self.settings.plots[row]
+        p.visible = item.checkState() == Qt.Checked
+        self.plot_stack.apply_plot_configs()
+        self._refresh()
+
+    def _on_plot_move(self, delta: int):
+        row = self.plot_list.currentRow()
+        j = row + delta
+        if not (0 <= row < len(self.settings.plots)) or not (0 <= j < len(self.settings.plots)):
+            return
+        move_plot(self.settings.plots, self.settings.channels, row, j)
+        self._refresh_structure()
+        self.plot_list.setCurrentRow(j)
 
     def _on_plot_add(self):
         n = len(self.settings.plots) + 1

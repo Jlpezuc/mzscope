@@ -88,6 +88,7 @@ class TimePlot(pg.PlotWidget):
         self.level_line.label.setColor(fg)
 
     def apply_config(self):
+        self.setVisible(self.cfg.visible)
         pi = self.getPlotItem()
         pi.setTitle(self.cfg.title, color=self.theme["plot_fg"], size="10pt")
         pi.setLabel("left", self.cfg.y_label or None)
@@ -142,7 +143,9 @@ class TimePlot(pg.PlotWidget):
         """Parte de calculo (sin tocar Qt, se ejecuta en el hilo de render): escala y acopla cada
         canal, aplica el filtro del grafico a las trazas "f", recorta a ``keep`` (rango de tiempo
         que se dibuja: fuera quedan las muestras de arranque de los filtros) y diezma.
-        Devuelve {"keys", "t", "data", "legend"} para ``apply``."""
+        Devuelve {"keys", "t", "data", "legend"} para ``apply``; None si el grafico esta oculto."""
+        if not self.cfg.visible:
+            return None
         traces = list(self.traces)
         cfg = self.cfg
         if not traces or len(t) == 0:
@@ -224,12 +227,13 @@ class PlotStack(QWidget):
             tp.ts = self.ts
             tp.set_channels(i, chan_cfgs, labels)
             tp.level_line.sigPositionChanged.connect(self._on_level_dragged)
+            tp.setVisible(pc.visible)
             if self.plots:
                 tp.setXLink(self.plots[0])
             self.splitter.addWidget(tp)
             self.plots.append(tp)
         if self.plots:
-            self.splitter.setSizes([1000] * len(self.plots))
+            self.splitter.setSizes([1000 if pc.visible else 0 for pc in plot_cfgs])
         self.layout_changed.emit()
 
     def apply_theme(self, theme: dict):
