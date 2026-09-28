@@ -244,6 +244,20 @@ class PlotStack(QWidget):
     def apply_plot_configs(self):
         for p in self.plots:
             p.apply_config()
+        self._share_space()
+
+    def _share_space(self):
+        """Reparte la altura entre los graficos visibles. Hace falta al volver a mostrar uno: el
+        splitter le habia dejado tamano 0 (al ocultarlo, o al recrear los graficos mientras lo
+        estaba) y reaparecerlia con altura 0. Si todos los visibles ya tienen sitio no se toca nada,
+        para no deshacer lo que el usuario haya ajustado con el raton."""
+        sizes = self.splitter.sizes()
+        shown = [i for i, p in enumerate(self.plots) if p.cfg.visible]
+        if not shown or all(sizes[i] > 0 for i in shown):
+            return
+        total = sum(sizes) or self.splitter.height() or 1000 * len(shown)
+        each = max(total // len(shown), 1)
+        self.splitter.setSizes([each if i in shown else 0 for i in range(len(self.plots))])
 
     # ---- disparo ------------------------------------------------------------
     def set_trigger(self, enabled: bool, slot: int, level: float, cfg: ChannelConfig | None):
