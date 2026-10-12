@@ -18,6 +18,8 @@ from . import protocol as P
 
 class SampleBuffer:
     MAX_GAP_FILL = 200   # huecos mayores no se rellenan con NaN (solo se salta el tiempo)
+    TS_READINGS = 4096   # lecturas de ISR_Period_us de las que se toma la mediana (Ts automatico)
+    TS_UPDATE = 64       # se recalcula la mediana cada TS_UPDATE lecturas nuevas
 
     def __init__(self, capacity: int = 600_000, n_slow: int = 58):
         self.capacity = int(capacity)
@@ -37,6 +39,8 @@ class SampleBuffer:
         # base de tiempo
         self.ts_auto_us: float | None = None
         self.ts_manual_us: float | None = None
+        self._ts_readings = np.zeros(self.TS_READINGS)
+        self._ts_n = 0            # lecturas recibidas (el anillo guarda las ultimas TS_READINGS)
         self.new_samples_since_clear = 0
 
     # ---- configuracion ---------------------------------------------------
@@ -64,6 +68,8 @@ class SampleBuffer:
         self.duplicates = 0
         self.max_slow_id = -1
         self.new_samples_since_clear = 0
+        self.ts_auto_us = None
+        self._ts_n = 0
 
     def header_mismatch(self) -> bool:
         """True si los slowDataID recibidos no encajan con el numero de datos lentos del javascope.h
@@ -77,6 +83,28 @@ class SampleBuffer:
         us = self.ts_manual_us if self.ts_manual_us else self.ts_auto_us
         return (us or 100.0) * 1e-6
 
+    @property
+    def ts_source(self) -> str:
+        if self.ts_manual_us:
+            return "manual"
+        return "ISR_Period_us" if self.ts_auto_us else "por defecto (100 us)"
+
+    @property
+    def ts_readings(self) -> int:
+        return min(self._ts_n, self.TS_READINGS)
+
+    def _add_ts_reading(self, v: float):
+        """``ISR_Period_us`` es la diferencia entre entradas consecutivas al ISR: lleva el jitter de
+        latencia de la interrupcion (varios us), aunque el periodo real (lo fija el reloj de la PL)
+        es constante. Una media corta oscila varios % y, como ``t = indice * Ts``, deforma el eje de
+        tiempo cuanto mayor es el indice. Se usa la mediana de las ultimas TS_READINGS lecturas
+        (robusta a las entradas tardias aisladas)."""
+        self._ts_readings[self._ts_n % self.TS_READINGS] = v
+        self._ts_n += 1
+        n = self.ts_readings
+        if self.ts_auto_us is None or n < self.TS_UPDATE or self._ts_n % self.TS_UPDATE == 0:
+            self.ts_auto_us = float(np.median(self._ts_readings[:n]))
+
     # ---- entrada ----------------------------------------------------------
     def add_packet(self, pkt: P.Packet, isr_period_slow_index: int):
         self.status = pkt.status
@@ -88,7 +116,7 @@ class SampleBuffer:
             if sid == isr_period_slow_index:
                 v = float(pkt.slow_content[k])
                 if 1.0 <= v <= 1e6:
-                    self.ts_auto_us = v if self.ts_auto_us is None else 0.9 * self.ts_auto_us + 0.1 * v
+                    self._add_ts_reading(v)
             if self.last_slow_id is not None:
                 gap = (sid - self.last_slow_id) % self.n_slow
                 if gap == 0:

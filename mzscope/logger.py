@@ -9,11 +9,18 @@
 Formato: separador ``;``, primera columna ``time_s`` y una columna por canal grabado con el
 nombre ``chN_<senal>``. Los valores llevan aplicados la escala y el offset del canal (los
 mismos que se ven en el grafico). Las muestras perdidas (huecos) salen como celdas vacias.
+
+Base de tiempo de la grabacion: la placa no envia marcas de tiempo, cada fila es una
+interrupcion. ``time_s = (indice_ISR - indice_ISR_de_la_primera_fila) * Ts`` con un ``Ts``
+**fijo durante toda la grabacion** (el que habia al pulsar Grabar), de modo que el tiempo es
+estrictamente creciente con paso constante y una fila vacia ocupa exactamente un paso. Junto al
+CSV se escribe ``<nombre>.json`` con Ts, su origen, filas, muestras perdidas y canales.
 """
 from __future__ import annotations
 
 import csv
 import io
+import json
 import queue
 import threading
 import time
@@ -63,7 +70,9 @@ class CsvRecorder:
         self.scales: list[float] = []
         self.offsets: list[float] = []
         self.path: Path | None = None
-        self.t0: float | None = None       # tiempo de la primera muestra grabada (time_s empieza en 0)
+        self.i0: int | None = None         # indice ISR de la primera muestra grabada (time_s empieza en 0)
+        self.ts: float = 1e-4              # periodo de muestreo fijo de la grabacion [s]
+        self.meta: dict = {}
         self.error: str | None = None
 
     @property
@@ -81,14 +90,29 @@ class CsvRecorder:
 
     # ---- control --------------------------------------------------------------
     def start(self, columns: list[int], names: list[str], scales: list[float], offsets: list[float],
-              path: str | Path | None = None):
+              ts: float, path: str | Path | None = None, meta: dict | None = None):
+        """``ts``: periodo de muestreo [s] que se usa para toda la grabacion. ``meta``: datos que
+        se anaden al ``.json`` de la grabacion."""
         self.stop()
         self.path = Path(path) if path else new_output_path()
         self.columns = list(columns)
         self.scales = list(scales)
         self.offsets = list(offsets)
-        self.t0 = None
+        self.i0 = None
+        self.ts = float(ts)
         self.error = None
+        self.meta = {
+            "csv": self.path.name,
+            "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "time_s": "(indice_ISR - indice_ISR_inicial) * Ts, Ts fijo durante la grabacion; "
+                      "las filas vacias son muestras perdidas y ocupan un paso",
+            "Ts_us": self.ts * 1e6,
+            "f_sample_Hz": 1.0 / self.ts,
+            "columns": [{"name": n, "slot": c + 1, "scale": self.scales[c], "offset": self.offsets[c]}
+                        for n, c in zip(names, self.columns)],
+            **(meta or {}),
+        }
+        self._write_meta()
         with self._lock:
             self._rows = 0
         self._queue = queue.Queue()
@@ -97,21 +121,37 @@ class CsvRecorder:
                                         name="mzscope-csv", daemon=True)
         self._thread.start()
 
-    def append(self, t: np.ndarray, data: np.ndarray):
-        """Encola un bloque (t en s, datos (n, 20)); no bloquea."""
-        if not self.active or len(t) == 0:
+    def append(self, index: np.ndarray, data: np.ndarray):
+        """Encola un bloque (indices ISR (n,), datos (n, 20)); no bloquea."""
+        if not self.active or len(index) == 0:
             return
-        if self.t0 is None:
-            self.t0 = float(t[0])
+        if self.i0 is None:
+            self.i0 = int(index[0])
+        t = (np.asarray(index, dtype=np.int64) - self.i0).astype(np.float64) * self.ts
         vals = apply_calibration(data, self.columns, self.scales, self.offsets)
-        self._queue.put((np.asarray(t, dtype=np.float64) - self.t0, vals))
+        self._queue.put((t, vals))
 
-    def stop(self):
+    def stop(self, **meta):
+        """Termina la grabacion; ``meta`` se anade al ``.json`` (p. ej. muestras perdidas)."""
         if self._thread is None:
             return
         self._stop.set()
         self._thread.join(timeout=10.0)
         self._thread = None
+        self.meta.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), rows=self.rows,
+                         duration_s=self.rows * self.ts, **meta)
+        self._write_meta()
+
+    @property
+    def meta_path(self) -> Path | None:
+        return self.path.with_suffix(".json") if self.path else None
+
+    def _write_meta(self):
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.meta_path.write_text(json.dumps(self.meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            self.error = str(exc)
 
     # ---- hilo -----------------------------------------------------------------
     def _run(self, path: Path, header: list[str]):
@@ -133,9 +173,9 @@ class CsvRecorder:
             self.error = str(exc)
 
     def _write_block(self, writer, t: np.ndarray, vals: np.ndarray):
-        block = np.column_stack([t, vals])
+        # tiempo con 10 cifras significativas: a 10 kHz el paso de 0,1 ms se resuelve hasta ~10^5 s
         writer.writerows(
-            ["" if np.isnan(v) else f"{v:.9g}" for v in row] for row in block
+            [f"{tt:.10g}"] + ["" if np.isnan(v) else f"{v:.9g}" for v in row] for tt, row in zip(t, vals)
         )
         with self._lock:
             self._rows += len(t)

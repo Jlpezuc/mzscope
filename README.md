@@ -82,7 +82,7 @@ el icono del scope: destino `pythonw.exe -m mzscope`, "iniciar en" la carpeta `m
    desplazar la ventana con los datos nuevos; **Captura única** limpia y captura una ventana;
    **FFT** abre el panel de espectro; **Guardar CSV / Guardar imagen**; **● Grabar** graba
    desde que se pulsa hasta que se vuelve a pulsar en `outputs/` (canales con *Ver* marcado,
-   `time_s` desde el inicio de la grabación).
+   `time_s` desde el inicio de la grabación con paso fijo, más un `.json` con `Ts`; ver *Base de tiempo*).
 
 ### Modo disparo
 
@@ -105,8 +105,17 @@ llegan menos muestras de las que genera el ISR, la barra de estado lo avisa en r
 
 ### Base de tiempo
 
-`t = índice_ISR × Ts`. `Ts` es `ISR_Period_us` medido por el R5 (mostrado en *Conexión*); si la
-placa no envía ese dato lento se puede fijar manualmente. La barra de estado muestra el número de
+La placa no envía marcas de tiempo: cada muestra es una interrupción y `t = índice_ISR × Ts`.
+`ISR_Period_us` es la diferencia entre entradas consecutivas al ISR, así que lleva el jitter de
+latencia de la interrupción (varios µs) aunque el periodo real, que fija el reloj de la PL, sea
+constante. Como el índice crece sin parar, un error pequeño en `Ts` se convierte en segundos, así
+que `Ts` automático es la **mediana de las últimas 4096 lecturas** (se ve en *Conexión*). Si se
+conoce la frecuencia del ISR, conviene fijar el periodo manual (p. ej. 100 µs a 10 kHz).
+
+La **grabación** congela `Ts` al pulsar Grabar y escribe `time_s = (índice − índice_inicial) × Ts`:
+paso constante, siempre creciente, y una fila vacía (muestra perdida) ocupa exactamente un paso.
+Junto al CSV queda `<nombre>.json` con `Ts_us`, su origen, filas, duración, muestras perdidas y la
+escala/offset de cada columna. La barra de estado muestra el número de
 muestras perdidas (cola del A53 llena) y repetidas (R5 parado, la placa reenvía la última).
 
 ## Probar sin placa

@@ -44,6 +44,7 @@ class MainWindow(QMainWindow):
         self.isr_period_id = self.names.slow_index("JSSD_FLOAT_ISR_Period_us")
         self.client = BoardClient(self)
         self.recorder = CsvRecorder()
+        self._rec_dropped0 = 0             # muestras perdidas al empezar la grabacion actual
         self.trigger = Trigger(self.buffer, settings.trigger)
         self._capture: tuple[np.ndarray, np.ndarray] | None = None   # ventana mostrada en modo disparo
         self._capture_wall = 0.0
@@ -774,7 +775,7 @@ class MainWindow(QMainWindow):
             n = self.buffer.total_written - before
             if n > 0:
                 d, i = self.buffer.latest(n)
-                self.recorder.append(i.astype(np.float64) * self.buffer.ts_seconds, d)
+                self.recorder.append(i, d)
         if self._single and self.buffer.new_samples_since_clear * self.buffer.ts_seconds >= self.cmb_window.currentData():
             self._single = False
             self.act_run.setChecked(True)
@@ -785,7 +786,7 @@ class MainWindow(QMainWindow):
         ts = b.ts_seconds
         self.lbl_ts.setText(f"Ts = {ts * 1e6:.2f} µs ({1 / ts:,.0f} Hz)")
         self.plot_stack.set_ts(ts)
-        self.lbl_ts_auto.setText(f"{b.ts_auto_us:.2f} µs" if b.ts_auto_us else "— (sin dato ISR_Period_us)")
+        self.lbl_ts_auto.setText(f"{b.ts_auto_us:.3f} µs (mediana de {b.ts_readings} lecturas)" if b.ts_auto_us else "— (sin dato ISR_Period_us)")
         self.lbl_gaps.setText(f"{b.dropped} / {b.duplicates}")
         mismatch = b.header_mismatch()
         if mismatch != self._header_mismatch:
@@ -796,7 +797,7 @@ class MainWindow(QMainWindow):
                                              "(contador de datos lentos): carga el de esa versión en Conexión", 15000)
         self.lbl_buf.setText(f"buffer {b.count:,} / {b.capacity:,} ({b.count * ts:,.1f} s)")
         if self.recorder.active:
-            secs = self.recorder.rows * ts
+            secs = self.recorder.rows * self.recorder.ts
             self.lbl_rec.setText(f"● REC {secs:,.1f} s · {self.recorder.rows:,} filas → outputs/{self.recorder.path.name}")
         else:
             self.lbl_rec.setText("")
@@ -969,8 +970,19 @@ class MainWindow(QMainWindow):
                 self.act_rec.setChecked(False)
                 return
             scales, offsets = self._calibration()
+            b = self.buffer
+            if not b.ts_manual_us and b.ts_readings < 200:
+                QMessageBox.information(self, "Grabar", "Todavía no hay suficientes lecturas de ISR_Period_us para fijar "
+                                        "el periodo de muestreo; espera un momento con la placa enviando datos "
+                                        "o fija el periodo manual en Conexión.")
+                self.act_rec.setChecked(False)
+                return
+            meta = {"Ts_source": b.ts_source, "Ts_readings": b.ts_readings,
+                    "board_header": self.names.source, "header_format": self.names.format,
+                    "dropped_before": b.dropped}
+            self._rec_dropped0 = b.dropped
             try:
-                self.recorder.start(cols, names, scales, offsets)
+                self.recorder.start(cols, names, scales, offsets, b.ts_seconds, meta=meta)
             except OSError as exc:
                 QMessageBox.warning(self, "Grabar", f"No se pudo crear el fichero en {OUTPUT_DIR}:\n{exc}")
                 self.act_rec.setChecked(False)
@@ -979,7 +991,7 @@ class MainWindow(QMainWindow):
             self.lbl_rec.setStyleSheet("color: #E8657C; font-weight: bold;")
         else:
             path, rows = self.recorder.path, self.recorder.rows
-            self.recorder.stop()
+            self.recorder.stop(dropped_samples=self.buffer.dropped - self._rec_dropped0)
             self.act_rec.setText("● Grabar")
             self.lbl_rec.setStyleSheet("")
             if self.recorder.error:
