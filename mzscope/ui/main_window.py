@@ -77,6 +77,7 @@ class MainWindow(QMainWindow):
         # auto-conexion: esperar a la placa desde el arranque
         self._user_stopped = False
         self._closing = False
+        self._clear_on_data = False
         if settings.auto_connect:
             QTimer.singleShot(300, self._start_connection)
 
@@ -703,8 +704,9 @@ class MainWindow(QMainWindow):
         self._user_stopped = False
         self.settings.host = self.ed_host.text().strip()
         self.settings.port = self.sp_port.value()
-        self.buffer.clear()
-        self.plot_stack.clear_data()
+        # el buffer se vacia al llegar el primer paquete (no ahora): si la reconexion es por una
+        # parada de la placa, lo ultimo que se vio sigue en pantalla mientras se espera
+        self._clear_on_data = True
         retry = self.chk_auto.isChecked()
         self.btn_connect.setText("Esperando placa… (cancelar)" if retry else "Conectando…")
         self.btn_connect.setEnabled(retry)
@@ -769,6 +771,10 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ datos
     def _on_packet(self, pkt):
+        if self._clear_on_data:
+            self._clear_on_data = False
+            self.buffer.clear()
+            self.plot_stack.clear_data()
         before = self.buffer.total_written
         self.buffer.add_packet(pkt, self.isr_period_id)
         if self.recorder.active:

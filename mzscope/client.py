@@ -20,6 +20,35 @@ from PySide6.QtCore import QObject, Signal
 
 from . import protocol as P
 
+# Vigilancia de la conexion: si en este tiempo no llega ningun paquete con muestras nuevas, se
+# cierra y se vuelve a conectar. Cubre la conexion "medio abierta" (el enlace cae sin que llegue
+# FIN/RST) y la placa que deja de meter muestras en la cola tras una reconexion (bug de
+# js_connection_established en ethernet.c sin parchear). Una placa sin ISR activo solo manda un
+# paquete repetido cada ~15 s, asi que tambien cuenta como parada.
+STALL_TIMEOUT_S = 10.0
+# Posicion de slowDataID[15] dentro del paquete (ver protocol._dtype): si las 15 son iguales, el A53
+# repitio la ultima muestra porque su cola estaba vacia (xQueueReceive agoto el tiempo).
+_SLOW_ID_OFF = P.PACKET_SIZE - 4 * P.SAMPLES_PER_PACKET
+
+
+def _is_fresh(raw: bytes) -> bool:
+    ids = raw[_SLOW_ID_OFF:]
+    return ids != ids[:4] * P.SAMPLES_PER_PACKET
+
+
+def _enable_keepalive(sock: socket.socket) -> None:
+    """Keepalive TCP agresivo (5 s de inactividad, sondeo cada 1 s): detecta enlaces muertos."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "SIO_KEEPALIVE_VALS"):                      # Windows
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 5000, 1000))
+        else:                                                          # Linux / macOS
+            for opt, val in (("TCP_KEEPIDLE", 5), ("TCP_KEEPINTVL", 1), ("TCP_KEEPCNT", 5)):
+                if hasattr(socket, opt):
+                    sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
+    except OSError:
+        pass
+
 
 def _net_worker(host: str, port: int, rx: mp.Queue, tx: mp.Queue, stop, retry: bool) -> None:
     """Bucle de red (proceso hijo). Mensajes a la GUI: (kind, ...).
@@ -32,6 +61,7 @@ def _net_worker(host: str, port: int, rx: mp.Queue, tx: mp.Queue, stop, retry: b
         try:
             sock = socket.create_connection((host, port), timeout=2.0)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            _enable_keepalive(sock)
             sock.settimeout(1.0)
             break
         except OSError as exc:
@@ -48,7 +78,7 @@ def _net_worker(host: str, port: int, rx: mp.Queue, tx: mp.Queue, stop, retry: b
     batch: list[bytes] = []
     commands: collections.deque[tuple[int, float]] = collections.deque()
     n_packets = n_bytes = 0
-    t_flush = t_stat = time.monotonic()
+    t_flush = t_stat = t_fresh = time.monotonic()
     reason = "Desconectado"
     try:
         while not stop.is_set():
@@ -57,6 +87,10 @@ def _net_worker(host: str, port: int, rx: mp.Queue, tx: mp.Queue, stop, retry: b
                     commands.append(tx.get_nowait())
             except queue.Empty:
                 pass
+            if time.monotonic() - t_fresh > STALL_TIMEOUT_S:
+                reason = (f"La placa no envia muestras nuevas desde hace {STALL_TIMEOUT_S:.0f} s "
+                          "(conexion colgada o ISR parado): reconectando")
+                break
             try:
                 chunk = sock.recv(65536)
             except socket.timeout:
@@ -74,6 +108,8 @@ def _net_worker(host: str, port: int, rx: mp.Queue, tx: mp.Queue, stop, retry: b
                 sock.sendall(P.build_command(*cmd))
                 batch.append(raw)
                 n_packets += 1
+                if _is_fresh(raw):
+                    t_fresh = time.monotonic()
             now = time.monotonic()
             if batch and (now - t_flush >= 0.01 or len(batch) >= 64):
                 rx.put(("data", b"".join(batch)))
@@ -86,6 +122,8 @@ def _net_worker(host: str, port: int, rx: mp.Queue, tx: mp.Queue, stop, retry: b
                 t_stat = now
     except OSError as exc:
         reason = f"Error de red: {exc}"
+    except Exception as exc:                       # cualquier otro fallo: avisar igualmente a la GUI
+        reason = f"Error en el proceso de red: {exc!r}"
     finally:
         try:
             sock.close()
@@ -146,6 +184,9 @@ class BoardClient(QObject):
         """Reparte lo recibido del proceso de red. Llamar periodicamente desde la GUI."""
         if self._rx is None:
             return
+        # Si el proceso de red ya habia muerto ANTES de vaciar la cola y no deja mensaje de
+        # desconexion (lo mataron, fallo al arrancar...), la GUI se quedaria "conectada" para siempre.
+        dead = self._proc is not None and not self._proc.is_alive()
         while True:
             try:
                 msg = self._rx.get_nowait()
@@ -168,4 +209,9 @@ class BoardClient(QObject):
                 self._proc = None
                 self._rx = self._tx = self._stop = None
                 self.disconnected.emit(msg[1])
-                break
+                return
+        if dead:
+            code = self._proc.exitcode
+            self._proc = None
+            self._rx = self._tx = self._stop = None
+            self.disconnected.emit(f"El proceso de red termino inesperadamente (codigo {code})")
